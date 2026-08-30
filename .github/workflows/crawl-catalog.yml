@@ -40,6 +40,10 @@ jobs:
           key: catalog-cache-${{ github.run_id }}
           restore-keys: catalog-cache-
 
+      # A broken parser must not get as far as overwriting a good catalogue.
+      - name: Check the parsers
+        run: python test_catalogo.py
+
       - name: Crawl
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

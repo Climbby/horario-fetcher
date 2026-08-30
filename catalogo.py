@@ -122,34 +122,72 @@ def parse_course(html):
         ],
     }
 
+# A programme page carries more than one table, and they do not share a
+# layout. The main plan has Regime where the optional-group tables have a
+# Codigo column and call the semester Duracao, so reading by column position
+# silently files a code as a semester. Everything is looked up by header.
+PROGRAMME_COLUMNS = {
+    "nome-da-unidade-curricular": "name",
+    "ano": "year",
+    "regime": "semester",
+    "duracao": "semester",
+    "codigo-da-unidade-curricular": "code",
+    "tipo": "kind",
+    "area-cientifica": "area",
+    "creditos-ects": "ects",
+}
+
+def header_columns(table):
+    """Maps our field names to column indexes, or None if this is not a plan."""
+    head = table.find('thead')
+    if not head:
+        return None
+    columns = {}
+    for index, cell in enumerate(head.find_all(['th', 'td'])):
+        field = PROGRAMME_COLUMNS.get(slugify(cell.get_text(' ', strip=True)))
+        if field and field not in columns:
+            columns[field] = index
+    return columns if "name" in columns else None
+
 def parse_programme(html):
-    """The study plan: one flat table whose 'Ano' column carries the year."""
+    """Every study-plan table on the page, core subjects and optional groups."""
     soup = BeautifulSoup(html, 'html.parser')
-    table = soup.select_one('table.sp-table') or soup.select_one('table')
-    if not table:
-        return []
-
     units = []
-    for row in table.select('tr'):
-        cells = row.select('td')
-        if len(cells) < 6:
-            continue  # header rows repeat once per year block
 
-        values = [c.get_text(' ', strip=True) for c in cells[:6]]
-        name, year, regime, kind, area, ects = values
+    for table in soup.select('table'):
+        columns = header_columns(table)
+        if not columns:
+            continue
 
-        link = row.select_one('a[href*="/unit/"]')
-        unit_match = re.search(r'/unit/(\d+)', link.get('href', '')) if link else None
+        for row in table.select('tr'):
+            cells = row.select('td')
+            if len(cells) <= max(columns.values()):
+                continue  # header rows repeat once per year block
 
-        units.append({
-            "uc_unit_id": int(unit_match.group(1)) if unit_match else None,
-            "name": name,
-            "curricular_year": int(year) if year.isdigit() else None,
-            "semester": normalize_semester(regime),
-            "is_optional": 'obrigat' not in kind.lower(),
-            "area": area,
-            "ects": float(ects.replace(',', '.')) if re.match(r'^[\d.,]+$', ects) else None,
-        })
+            def value(field):
+                index = columns.get(field)
+                return cells[index].get_text(' ', strip=True) if index is not None else ""
+
+            name = value("name")
+            if not name:
+                continue
+
+            link = row.select_one('a[href*="/unit/"]')
+            unit_match = re.search(r'/unit/(\d+)', link.get('href', '')) if link else None
+            year, ects = value("year"), value("ects")
+
+            units.append({
+                "uc_unit_id": int(unit_match.group(1)) if unit_match else None,
+                # Only the group tables spell the code out; for the rest it has
+                # to be fetched from the subject's own page.
+                "code": value("code") or None,
+                "name": name,
+                "curricular_year": int(year) if year.isdigit() else None,
+                "semester": normalize_semester(value("semester")),
+                "is_optional": 'obrigat' not in value("kind").lower(),
+                "area": value("area"),
+                "ects": float(ects.replace(',', '.')) if re.match(r'^[\d.,]+$', ects) else None,
+            })
     return units
 
 def parse_unit(html):
@@ -166,7 +204,10 @@ def parse_unit(html):
             fields[key] = value.get_text(' ', strip=True)
 
     code = fields.get("código", "")
-    if not re.match(r'^\d{6,10}$', code):
+    # Most codes look like 01000010, but the nursing school publishes the unit
+    # id itself as the code - five digits. Both are what InforEstudante will be
+    # matched against, so neither can be thrown away for being the wrong shape.
+    if not re.match(r'^\d{3,12}$', code):
         return None  # a page without a usable code is a page we cannot join
     return {"code": code, "curricular_year_hint": fields.get("ano")}
 
@@ -240,7 +281,12 @@ def crawl(year, only_course=None, limit=None, cache_path=CACHE_FILE, fetcher=Non
                 if uid is None:
                     continue
                 key = str(uid)
-                if key in cache:
+                if unit["code"]:
+                    # The optional-group tables print the code, so that page
+                    # never has to be opened.
+                    code = unit["code"]
+                    cache.setdefault(key, code)
+                elif key in cache:
                     code = cache[key]
                     cache_hits += 1
                 else:
