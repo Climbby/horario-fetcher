@@ -1,0 +1,61 @@
+name: Crawl UC catalogue
+
+# apps.uc.pt is public, so this needs no credentials to read - only the
+# Supabase service key to write what it finds.
+on:
+  schedule:
+    - cron: "17 4 * * 1"  # Mondays, 04:17 UTC
+  workflow_dispatch:
+    inputs:
+      course:
+        description: "Only this uc_course_id (e.g. 362 = LEI). Empty = all."
+        required: false
+        default: ""
+      push:
+        description: "Write to Supabase"
+        type: boolean
+        default: true
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Only what the crawler imports: selenium is the fetcher's dependency,
+      # not this job's.
+      - run: pip install requests beautifulsoup4 lxml
+
+      # unit_id -> codigo. Subjects repeat heavily across branches and
+      # courses, so carrying this between runs is what keeps the crawl short.
+      - name: Restore unit-code cache
+        uses: actions/cache@v4
+        with:
+          path: catalog_cache.json
+          key: catalog-cache-${{ github.run_id }}
+          restore-keys: catalog-cache-
+
+      - name: Crawl
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          COURSE: ${{ inputs.course }}
+          PUSH: ${{ inputs.push == false && 'no' || 'yes' }}
+        run: |
+          args="--out catalog.json"
+          [ -n "$COURSE" ] && args="$args --course $COURSE"
+          [ "$PUSH" = "yes" ] && args="$args --push"
+          echo "catalogo.py $args"
+          python catalogo.py $args
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: catalog
+          path: catalog.json
+          if-no-files-found: warn

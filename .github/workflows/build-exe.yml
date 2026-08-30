@@ -1,0 +1,45 @@
+name: Build Windows exe
+
+# PyInstaller can't cross-compile, so the .exe has to be built on Windows.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      # --collect-all selenium bundles selenium-manager.exe, which is what
+      # downloads the matching chromedriver on the user's machine.
+      - name: Build
+        run: >
+          pyinstaller --onefile --console
+          --name HorarioFetcher
+          --collect-all selenium
+          horariofetcher.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HorarioFetcher
+          path: dist/HorarioFetcher.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/HorarioFetcher.exe --generate-notes

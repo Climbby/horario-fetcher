@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+build/
+dist/
+*.spec
+*.csv
+
+# Per-user state, never shared
+user_settings.json
+fetcher_settings.json
+classes_filtered.json
+catalog_cache.json
+catalog.json
+
+# Uso pessoal, fora do repo publico
+private/
